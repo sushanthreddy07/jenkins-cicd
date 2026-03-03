@@ -12,8 +12,13 @@ jobs:
 
     runs-on: ubuntu-latest
     permissions:
+      
       contents: read
-      packages: write
+      id-token: write
+      actions: read
+      security-events: write
+  # Add this line:
+      dependencies: write
 
     steps:
     - uses: actions/checkout@v4
