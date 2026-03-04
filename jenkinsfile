@@ -1,0 +1,89 @@
+pipeline {
+  agent { label 'maven-agent' }   // your agent label
+
+  environment {
+    GIT_CRED_ID   = 'github-creds'
+    SSH_CRED_ID   = 'appserver-ssh'
+    APP_SERVER_HOST = '172.31.xx.xx'   // <-- change to your App Server PRIVATE IP
+    APP_SERVER_DIR  = '/opt/myapp'
+  }
+
+  options {
+    timestamps()
+  }
+
+  stages {
+
+    stage('Checkout Code') {
+      steps {
+        checkout scm
+      }
+    }
+
+    stage('Build & Test') {
+      steps {
+        sh 'mvn -B clean test'
+      }
+    }
+
+    stage('Security Scan (OWASP Dependency-Check)') {
+      steps {
+        sh '''
+          rm -rf odc dependency-check dc.zip || true
+          mkdir -p odc
+
+          curl -L -o dc.zip https://github.com/jeremylong/DependencyCheck/releases/download/v9.0.9/dependency-check-9.0.9-release.zip
+          unzip -q dc.zip
+          mv dependency-check* dependency-check
+
+          ./dependency-check/bin/dependency-check.sh \
+            --project "jenkins-cicd" \
+            --scan . \
+            --format "HTML" \
+            --out odc \
+            --failOnCVSS 7
+        '''
+      }
+      post {
+        always {
+          archiveArtifacts artifacts: 'odc/**', allowEmptyArchive: true
+        }
+      }
+    }
+
+    stage('Package') {
+      steps {
+        sh 'mvn -B package -DskipTests'
+        sh 'ls -lah target || true'
+        archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+      }
+    }
+
+    stage('Deploy to Application Server (main only)') {
+      when { branch 'main' }
+
+      steps {
+        sshagent(credentials: ["${SSH_CRED_ID}"]) {
+          sh '''
+            set -e
+            JAR=$(ls -1 target/*.jar | head -n 1)
+
+            echo "Deploying $JAR to ${APP_SERVER_HOST}"
+            scp -o StrictHostKeyChecking=no "$JAR" ubuntu@"${APP_SERVER_HOST}":"${APP_SERVER_DIR}/app.jar"
+
+            ssh -o StrictHostKeyChecking=no ubuntu@"${APP_SERVER_HOST}" "bash ${APP_SERVER_DIR}/restart.sh"
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "Pipeline completed successfully"
+    }
+    failure {
+      echo "Pipeline failed - check stage logs"
+    }
+  }
+}
