@@ -1,74 +1,67 @@
 pipeline {
-    agent any
-    
+    agent { label 'slave' }   // change to your actual agent label if different
+
+    environment {
+        APP_SERVER = '172.31.69.45'   // your app server private IP
+    }
+
     stages {
-        stage('checkoutSCSC') {
+        stage('Checkout Code') {
             steps {
-                git branch: 'main', url: 'https://github.com/devopsenthusiasts/devopsproject.git'
-                mail bcc: '', body: 'The source code is checked out successfully!', cc: '', from: '', replyTo: '', subject: 'checkout successful', to: 'projects2488@gmail.com'
+                git branch: "${env.BRANCH_NAME}",
+                    credentialsId: 'github-creds',
+                    url: 'https://github.com/sushanthreddy07/jenkins-cicd.git'
             }
         }
-        
-        stage('build') {
+
+        stage('Build & Test') {
             steps {
-                sh 'mvn package'
-                mail bcc: '', body: 'The project is built successfully!', cc: '', from: '', replyTo: '', subject: 'build successful', to: 'projects2488@gmail.com'
+                sh 'mvn clean test'
             }
         }
-        
-        stage('deploytotest') {
+
+        stage('Security Scan') {
             steps {
-                deploy adapters: [tomcat9(alternativeDeploymentContext: '', credentialsId: 'tomcattestcreds', path: '', url: 'http://172.31.25.98:8080')], contextPath: 'testappfromscripted', war: '**/*.war'
-                mail bcc: '', body: 'The app is successfully deployed to QA!', cc: '', from: '', replyTo: '', subject: 'Deploy to test successful', to: 'projects2488@gmail.com'
+                sh '''
+                    echo "Running security scan..."
+                    mkdir -p scan-report
+                    mvn dependency:tree > scan-report/dependency-report.txt
+                '''
             }
         }
-        
-        stage('runtests') {
+
+        stage('Package') {
             steps {
-                sh 'echo Testing passed'
-                mail bcc: '', body: 'The test cases did run successfully!', cc: '', from: '', replyTo: '', subject: 'Tests Passed/ successful', to: 'projects2488@gmail.com'
+                sh 'mvn package -DskipTests'
+                archiveArtifacts artifacts: 'target/*.jar, target/*.war', fingerprint: true
             }
         }
-        
-        stage('deploytoProd') {
+
+        stage('Deploy to Application Server') {
+            when {
+                branch 'main'
+            }
             steps {
-                deploy adapters: [tomcat9(alternativeDeploymentContext: '', credentialsId: 'tomcat-production', path: '', url: 'http://172.31.16.189:8080')], contextPath: 'prodappfromscripted', war: '**/*.war'
-                mail bcc: '', body: 'Application is LIVE', cc: '', from: '', replyTo: '', subject: 'application is LIVE', to: 'projects2488@gmail.com'
+                sshagent(credentials: ['appserver-ssh']) {
+                    sh '''
+                        scp -o StrictHostKeyChecking=no target/*.jar ubuntu@${APP_SERVER}:/home/ubuntu/
+                        ssh -o StrictHostKeyChecking=no ubuntu@${APP_SERVER} '
+                            pkill -f "java -jar" || true
+                            nohup java -jar /home/ubuntu/*.jar > /home/ubuntu/app.log 2>&1 &
+                        '
+                    '''
+                }
             }
         }
     }
-    
+
     post {
+        success {
+            echo 'Pipeline completed successfully.'
+        }
         failure {
-            mail bcc: '', 
-                 body: "The pipeline failed at stage: ${env.STAGE_NAME}. Please check the Jenkins console for more details.", 
-                 cc: '', 
-                 from: '', 
-                 replyTo: '', 
-                 subject: 'Pipeline Failed', 
-                 to: 'projects2488@gmail.com'
+            echo 'Pipeline failed.'
         }
-        
-        unstable {
-            mail bcc: '', 
-                 body: "The pipeline is unstable at stage: ${env.STAGE_NAME}. Please check the Jenkins console for more details.", 
-                 cc: '', 
-                 from: '', 
-                 replyTo: '', 
-                 subject: 'Pipeline Unstable', 
-                 to: 'projects2488@gmail.com'
-        }
-        
-        aborted {
-            mail bcc: '', 
-                 body: "The pipeline was aborted at stage: ${env.STAGE_NAME}.", 
-                 cc: '', 
-                 from: '', 
-                 replyTo: '', 
-                 subject: 'Pipeline Aborted', 
-                 to: 'projects2488@gmail.com'
-        }
-        
         always {
             echo 'Pipeline execution completed.'
         }
